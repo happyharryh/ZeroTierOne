@@ -41,7 +41,8 @@ Settings available in `local.conf` (this is not valid JSON, and JSON does not al
 		"allowManagementFrom": [ "NETWORK/bits", ...] |null, /* If non-NULL, allow JSON/HTTP management from this IP network. Default is 127.0.0.1 only. */
 		"bind": [ "ip",... ], /* If present and non-null, bind to these IPs instead of to each interface (wildcard IP allowed) */
 		"allowTcpFallbackRelay": true|false, /* Allow or disallow establishment of TCP relay connections (true by default) */
-		"multipathMode": 0|1|2 /* multipath mode: none (0), random (1), proportional (2) */
+		"multipathMode": 0|1|2, /* multipath mode: none (0), random (1), proportional (2) */
+		"disableMetrics": true|false /* If true, disable the collection of metrics in metrics.prom. */
 	}
 }
 ```

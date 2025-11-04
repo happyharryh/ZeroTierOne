@@ -2931,6 +2931,15 @@ class OneServiceImpl : public OneService {
 					_allowManagementFrom.push_back(nw);
 			}
 		}
+
+		bool disableMetrics = OSUtils::jsonBool(settings["disableMetrics"], false);
+		if (disableMetrics) {
+			std::shared_ptr<prometheus::Registry> registry;
+			prometheus::simpleapi::saver.set_registry(registry);
+		}
+		else {
+			prometheus::simpleapi::saver.set_registry(prometheus::simpleapi::registry_ptr);
+		}
 	}
 
 #if ZT_VAULT_SUPPORT
