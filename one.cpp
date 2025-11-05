@@ -2330,14 +2330,18 @@ int main(int argc, char** argv)
 	}
 #endif	 // !ZT_ONE_NO_ROOT_CHECK
 	if (runAsDaemon) {
+		prometheus::simpleapi::saver.stop();
+
 		long p = (long)fork();
 		if (p < 0) {
 			fprintf(stderr, "%s: could not fork" ZT_EOL_S, argv[0]);
 			return 1;
 		}
 		else if (p > 0)
-			return 0;	// forked
+			_Exit(0);	// forked
 						// else p == 0, so we are daemonized
+
+		prometheus::simpleapi::saver.restart();
 	}
 #endif	 // __UNIX_LIKE__
 
