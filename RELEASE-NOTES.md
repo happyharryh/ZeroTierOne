@@ -1,6 +1,10 @@
 ZeroTier Release Notes
 ======
 
+## WORK-IN-PROGRESS
+
+  * Metrics collection is now disabled by default. It can be enabled via the `enableMetrics` setting in `local.conf`.
+
 ## 2025-08-21 -- Version 1.16.0
 
   * License Changes
