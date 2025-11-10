@@ -1278,9 +1278,9 @@ static int cli(int argc, char** argv)
 				return 0;
 			}
 
-			BOOL err = WriteFile(file, dump.str().c_str(), dump.str().size(), NULL, NULL);
-			if (err = FALSE) {
-				fprintf(stderr, "Error writing file");
+			BOOL ok = WriteFile(file, dump.str().c_str(), dump.str().size(), NULL, NULL);
+			if (ok == FALSE) {
+				fprintf(stderr, "Error writing file\n");
 				return 1;
 			}
 			CloseHandle(file);
