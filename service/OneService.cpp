@@ -2609,8 +2609,8 @@ class OneServiceImpl : public OneService {
 		_controlPlaneV6.set_pre_routing_handler(authCheck);
 
 #if ZT_DEBUG == 1
-		_controlPlane.set_logger([](const httplib::Request& req, const httplib::Response& res) { fprintf(stderr, "%s", http_log(req, res).c_str()); });
-		_controlPlaneV6.set_logger([](const httplib::Request& req, const httplib::Response& res) { fprintf(stderr, "%s", http_log(req, res).c_str()); });
+		//_controlPlane.set_logger([](const httplib::Request& req, const httplib::Response& res) { fprintf(stderr, "%s", http_log(req, res).c_str()); });
+		//_controlPlaneV6.set_logger([](const httplib::Request& req, const httplib::Response& res) { fprintf(stderr, "%s", http_log(req, res).c_str()); });
 #endif
 		if (_primaryPort == 0) {
 			fprintf(stderr, "unable to determine local control port");
