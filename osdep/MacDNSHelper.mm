@@ -9,6 +9,7 @@
 #include "MacDNSHelper.hpp"
 
 #include <stdio.h>
+#include <sys/utsname.h>
 
 #include <SystemConfiguration/SystemConfiguration.h>
 
@@ -17,6 +18,15 @@ namespace ZeroTier {
 static void printKeys (const void* key, const void* value, void* context) {
   CFShow(key);
   CFShow(value);
+}
+
+static int darwin_version_major () {
+    int version_major = -1;
+    struct utsname system_info;
+    if (uname(&system_info) == 0) {
+        sscanf(system_info.release, "%d", &version_major);
+    }
+    return version_major;
 }
 
 void MacDNSHelper::setDNS(uint64_t nwid, const char *domain, const std::vector<InetAddress> &servers)
@@ -164,8 +174,10 @@ bool MacDNSHelper::addIps4(uint64_t nwid, const MAC mac, const char *dev, const 
     values[3] = cfrouter;
 
 
+    // skip setting Router to avoid breaking the routing table on MacOS Tahoe and later
+    static int size = darwin_version_major() < 25 ? SIZE : SIZE - 1;
     CFDictionaryRef dict = CFDictionaryCreate(NULL,
-        (const void**)keys, (const void**)values, SIZE, &kCFCopyStringDictionaryKeyCallBacks,
+        (const void**)keys, (const void**)values, size, &kCFCopyStringDictionaryKeyCallBacks,
         &kCFTypeDictionaryValueCallBacks);
 
     // CFDictionaryApplyFunction(dict, printKeys, NULL);
