@@ -1016,11 +1016,11 @@ class OneServiceImpl : public OneService {
 #endif
 
 		_controlPlane.stop();
-		if (_serverThreadRunning) {
+		if (_serverThread.joinable()) {
 			_serverThread.join();
 		}
 		_controlPlaneV6.stop();
-		if (_serverThreadRunningV6) {
+		if (_serverThreadV6.joinable()) {
 			_serverThreadV6.join();
 		}
 		_rxPacketVector_m.lock();
