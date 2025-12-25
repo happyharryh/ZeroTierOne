@@ -1015,11 +1015,11 @@ class OneServiceImpl : public OneService {
 #endif
 
 		_controlPlane.stop();
-		if (_serverThreadRunning) {
+		if (_serverThread.joinable()) {
 			_serverThread.join();
 		}
 		_controlPlaneV6.stop();
-		if (_serverThreadRunningV6) {
+		if (_serverThreadV6.joinable()) {
 			_serverThreadV6.join();
 		}
 		_rxPacketVector_m.lock();
@@ -2938,6 +2938,7 @@ class OneServiceImpl : public OneService {
 		else {
 			std::shared_ptr<prometheus::Registry> registry;
 			prometheus::simpleapi::saver.set_registry(registry);
+			prometheus::simpleapi::saver.stop();
 		}
 	}
 

@@ -119,6 +119,9 @@ else
 	INCLUDES+=-I${OTEL_INSTALL_DIR}/include
 endif
 
+# Set cpp-httplib thread pool count
+override DEFS+=-DCPPHTTPLIB_THREAD_POOL_COUNT=1
+
 all: one
 
 ext/x64-salsa2012-asm/salsa2012.o:
