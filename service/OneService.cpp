@@ -2620,7 +2620,7 @@ class OneServiceImpl : public OneService {
 #ifndef ZT_EXTOSDEP
 		bool v4controlPlaneBound = false;
 		_controlPlane.set_address_family(AF_INET);
-		if (_controlPlane.bind_to_port("0.0.0.0", _primaryPort)) {
+		if (_controlPlane.bind_to_port("127.0.0.1", _primaryPort)) {
 			_serverThread = std::thread([&] {
 				_serverThreadRunning = true;
 				fprintf(stderr, "Starting Control Plane...\n");
@@ -2633,13 +2633,13 @@ class OneServiceImpl : public OneService {
 			v4controlPlaneBound = true;
 		}
 		else {
-			fprintf(stderr, "Error binding control plane to 0.0.0.0:%d\n", _primaryPort);
+			fprintf(stderr, "Error binding control plane to 127.0.0.1:%d\n", _primaryPort);
 			v4controlPlaneBound = false;
 		}
 
 		bool v6controlPlaneBound = false;
 		_controlPlaneV6.set_address_family(AF_INET6);
-		if (_controlPlaneV6.bind_to_port("::", _primaryPort)) {
+		if (_controlPlaneV6.bind_to_port("::1", _primaryPort)) {
 			_serverThreadV6 = std::thread([&] {
 				_serverThreadRunningV6 = true;
 				fprintf(stderr, "Starting V6 Control Plane...\n");
@@ -2652,7 +2652,7 @@ class OneServiceImpl : public OneService {
 			v6controlPlaneBound = true;
 		}
 		else {
-			fprintf(stderr, "Error binding control plane to [::]:%d\n", _primaryPort);
+			fprintf(stderr, "Error binding control plane to [::1]:%d\n", _primaryPort);
 			v6controlPlaneBound = false;
 		}
 
