@@ -2938,6 +2938,7 @@ class OneServiceImpl : public OneService {
 		else {
 			std::shared_ptr<prometheus::Registry> registry;
 			prometheus::simpleapi::saver.set_registry(registry);
+			prometheus::simpleapi::saver.stop();
 		}
 	}
 
