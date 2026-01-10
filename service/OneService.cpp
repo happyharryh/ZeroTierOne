@@ -31,6 +31,7 @@
 #include "../node/Mutex.hpp"
 #include "../node/Node.hpp"
 #include "../node/Peer.hpp"
+#include "../node/Topology.hpp"
 #include "../node/Utils.hpp"
 #include "../node/World.hpp"
 #include "../osdep/Binder.hpp"
@@ -936,6 +937,9 @@ class OneServiceImpl : public OneService {
 	double _exporterSampleRate;
 #endif
 
+	uint64_t _worldIdForMoonUpdate;
+	ECC::Pair _signingKeyForMoonUpdate;
+
 	// end member variables ----------------------------------------------------
 
 	OneServiceImpl(const char* hp, unsigned int port)
@@ -983,6 +987,7 @@ class OneServiceImpl : public OneService {
 		, _exporterEndpoint()
 		, _exporterSampleRate(1.0)
 #endif
+		, _worldIdForMoonUpdate(0)
 	{
 		_ports[0] = 0;
 		_ports[1] = 0;
@@ -1297,6 +1302,7 @@ class OneServiceImpl : public OneService {
 			int64_t lastCleanedPeersDb = 0;
 			int64_t lastLocalConfFileCheck = OSUtils::now();
 			int64_t lastOnline = lastLocalConfFileCheck;
+			int64_t lastUpdateMoons = lastLocalConfFileCheck;
 
 			for (;;) {
 				_run_m.lock();
@@ -1426,6 +1432,12 @@ class OneServiceImpl : public OneService {
 				if ((now - lastCleanedPeersDb) >= 3600000) {
 					lastCleanedPeersDb = now;
 					OSUtils::cleanDirectory((_homePath + ZT_PATH_SEPARATOR_S "peers.d").c_str(), now - 2592000000LL);	// delete older than 30 days
+				}
+
+				// Update moons
+				if (_worldIdForMoonUpdate && (now - lastUpdateMoons) >= 300000) {
+					lastUpdateMoons = now;
+					updateMoons(now, portstr);
 				}
 
 				const unsigned long delay = (dl > now) ? (unsigned long)(dl - now) : 500;
@@ -2940,6 +2952,14 @@ class OneServiceImpl : public OneService {
 			prometheus::simpleapi::saver.set_registry(registry);
 			prometheus::simpleapi::saver.stop();
 		}
+
+		json& mu = lc["moonUpdate"];
+		const std::string worldIdForMoonUpdate(OSUtils::jsonString(mu["id"], ""));
+		if (worldIdForMoonUpdate != "") {
+			_worldIdForMoonUpdate = Utils::hexStrToU64(worldIdForMoonUpdate.c_str());
+			Utils::unhex(OSUtils::jsonString(mu["signingKey"], "").c_str(), _signingKeyForMoonUpdate.pub.data, ZT_ECC_PUBLIC_KEY_SET_LEN);
+			Utils::unhex(OSUtils::jsonString(mu["signingKey_SECRET"], "").c_str(), _signingKeyForMoonUpdate.priv.data, ZT_ECC_PRIVATE_KEY_SET_LEN);
+		}
 	}
 
 #if ZT_VAULT_SUPPORT
@@ -3211,6 +3231,56 @@ class OneServiceImpl : public OneService {
 #endif
 			}
 		}
+	}
+
+	void updateMoons(uint64_t now, char buf[64]) {
+		const std::vector<World>& moons = _node->moons();
+		std::vector<World>::const_iterator moon = std::find_if(
+			moons.begin(), moons.end(), [this](const World& m) {
+			return m.id() == _worldIdForMoonUpdate;
+		});
+		if (moon == moons.end()) {
+			return;
+		}
+
+		const std::vector<World::Root>& roots = moon->roots();
+		std::vector<World::Root>::const_iterator root = std::find_if(
+			roots.begin(), roots.end(), [this](const World::Root& r) {
+			return r.identity == _node->identity();
+		});
+		if (root == roots.end()) {
+			return;
+		}
+
+		std::vector<InetAddress> addrs = _binder.allBoundLocalInterfaceAddresses();
+		const std::vector<InetAddress>& surfaceAddrs = _node->SurfaceAddresses();
+		addrs.insert(addrs.end(), surfaceAddrs.begin(), surfaceAddrs.end());
+
+		std::sort(addrs.begin(), addrs.end());
+		addrs.erase(std::unique(addrs.begin(), addrs.end()), addrs.end());
+		if (addrs == root->stableEndpoints) {
+			return;
+		}
+
+		fprintf(stderr, "Updated moons to [");
+		for (const InetAddress& addr : addrs) {
+			fprintf(stderr, " %s", addr.toString(buf));
+		}
+
+		std::vector<World::Root> newRoots;
+		newRoots.reserve(roots.size());
+		for (const World::Root& r : roots) {
+			if (&r == &*root) {
+				newRoots.push_back(World::Root{r.identity, std::move(addrs)});
+			} else {
+				newRoots.push_back(r);
+			}
+		}
+
+		fprintf(stderr, " ] %s\n", _node->RR->topology->addWorld(nullptr, World::make(
+			World::TYPE_MOON, _worldIdForMoonUpdate, now,
+			moon->updatesMustBeSignedBy(), newRoots, _signingKeyForMoonUpdate
+		), false) ? "succeeded" : "failed");
 	}
 
 	// =========================================================================
@@ -4395,6 +4465,11 @@ OneService* OneService::newInstance(const char* hp, unsigned int port)
 }
 OneService::~OneService()
 {
+}
+
+uint64_t _worldIdForMoonUpdate(const void* uptr)
+{
+	return reinterpret_cast<const OneServiceImpl*>(uptr)->_worldIdForMoonUpdate;
 }
 
 }	// namespace ZeroTier
