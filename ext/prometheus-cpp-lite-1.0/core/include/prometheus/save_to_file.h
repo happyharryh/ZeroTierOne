@@ -51,6 +51,7 @@ namespace prometheus {
     SaveToFile() = default;
 
     void stop() {
+      if (must_die) return;
       must_die = true;
       worker_thread.join();
     }
@@ -61,8 +62,7 @@ namespace prometheus {
     }
 
     ~SaveToFile() {
-      must_die = true;
-      worker_thread.join();
+      stop();
     }
 
     SaveToFile(std::shared_ptr<Registry>& registry_, const std::chrono::seconds& period_, const std::string& filename_) {

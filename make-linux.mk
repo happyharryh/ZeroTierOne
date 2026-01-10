@@ -396,6 +396,9 @@ override CXXFLAGS+=-fPIC -fPIE
 # Non-executable stack
 override LDFLAGS+=-Wl,-z,noexecstack
 
+# Set cpp-httplib thread pool count
+override DEFS+=-DCPPHTTPLIB_THREAD_POOL_COUNT=1
+
 .PHONY: all
 all:	one
 
