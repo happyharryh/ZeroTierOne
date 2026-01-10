@@ -9,7 +9,15 @@
 #ifndef ZT_PHY_HPP
 #define ZT_PHY_HPP
 
+#if defined(__linux__) || defined(linux) || defined(__LINUX__) || defined(__linux)
+#define LINUX_EPOLL
+#endif
+
+#ifdef LINUX_EPOLL
+#include <unordered_map>
+#else
 #include <list>
+#endif
 #include <stdexcept>
 #include <stdio.h>
 #include <stdlib.h>
@@ -39,7 +47,11 @@
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <signal.h>
+#ifdef LINUX_EPOLL
+#include <sys/epoll.h>
+#else
 #include <sys/select.h>
+#endif
 #include <sys/socket.h>
 #include <sys/time.h>
 #include <sys/types.h>
@@ -141,11 +153,31 @@ template <typename HANDLER_PTR_TYPE> class Phy {
 		void* uptr;	  // user-settable pointer
 		uint16_t localPort;
 		ZT_PHY_SOCKADDR_STORAGE_TYPE saddr;	  // remote for TCP_OUT and TCP_IN, local for TCP_LISTEN, RAW, and UDP
+#ifdef LINUX_EPOLL
+		uint32_t events = 0;
+#endif
 	};
 
+#ifdef LINUX_EPOLL
+	std::unordered_map<int, PhySocketImpl> _socks;
+	int _epollfd;
+
+	inline int set_epoll_event(PhySocketImpl *socket, uint32_t add, uint32_t del = 0) const {
+		int op = socket->events ? EPOLL_CTL_MOD : EPOLL_CTL_ADD;
+		socket->events = (socket->events | add) & ~del;
+		if (!socket->events)
+			return epoll_ctl(_epollfd, EPOLL_CTL_DEL, socket->sock, nullptr);
+
+		static epoll_event ev;
+		ev.events = socket->events;
+		ev.data.fd = socket->sock;
+		return epoll_ctl(_epollfd, op, socket->sock, &ev);
+	}
+#else
 	std::list<PhySocketImpl> _socks;
 	fd_set _readfds;
 	fd_set _writefds;
+#endif
 #if defined(_WIN32) || defined(_WIN64)
 	fd_set _exceptfds;
 #endif
@@ -165,8 +197,12 @@ template <typename HANDLER_PTR_TYPE> class Phy {
 	 */
 	Phy(HANDLER_PTR_TYPE handler, bool noDelay, bool noCheck) : _handler(handler)
 	{
+#ifdef LINUX_EPOLL
+		_epollfd = ::epoll_create(1);
+#else
 		FD_ZERO(&_readfds);
 		FD_ZERO(&_writefds);
+#endif
 
 #if defined(_WIN32) || defined(_WIN64)
 		FD_ZERO(&_exceptfds);
@@ -207,17 +243,32 @@ template <typename HANDLER_PTR_TYPE> class Phy {
 		_whackSendSocket = pipes[1];
 		_noDelay = noDelay;
 		_noCheck = noCheck;
+#ifdef LINUX_EPOLL
+		PhySocketImpl sws;
+		sws.sock = _whackReceiveSocket;
+		set_epoll_event(&sws, EPOLLIN, 0);
+#else
 		FD_SET(_whackReceiveSocket, &_readfds);
+#endif
 	}
 
 	~Phy()
 	{
+#ifdef LINUX_EPOLL
+		for (const std::pair<int, PhySocketImpl>& s : _socks) {
+			if (s.second.type != ZT_PHY_SOCKET_CLOSED)
+				this->close((PhySocket*)&(s.second), true);
+#else
 		for (typename std::list<PhySocketImpl>::const_iterator s(_socks.begin()); s != _socks.end(); ++s) {
 			if (s->type != ZT_PHY_SOCKET_CLOSED)
 				this->close((PhySocket*)&(*s), true);
+#endif
 		}
 		ZT_PHY_CLOSE_SOCKET(_whackReceiveSocket);
 		ZT_PHY_CLOSE_SOCKET(_whackSendSocket);
+#ifdef LINUX_EPOLL
+		::close(_epollfd);
+#endif
 	}
 
 	/**
@@ -307,17 +358,30 @@ template <typename HANDLER_PTR_TYPE> class Phy {
 		if (_socks.size() >= ZT_PHY_MAX_SOCKETS)
 			return (PhySocket*)0;
 		try {
+#ifdef LINUX_EPOLL
+			_socks.emplace(fd, PhySocketImpl());
+#else
 			_socks.push_back(PhySocketImpl());
+#endif
 		}
 		catch (...) {
 			return (PhySocket*)0;
 		}
+#ifdef LINUX_EPOLL
+		PhySocketImpl& sws = _socks.at(fd);
+#else
 		PhySocketImpl& sws = _socks.back();
+#endif
 		if ((long)fd > _nfds)
 			_nfds = (long)fd;
+#ifndef LINUX_EPOLL
 		FD_SET(fd, &_readfds);
+#endif
 		sws.type = ZT_PHY_SOCKET_UNIX_IN; /* TODO: Type was changed to allow for CBs with new RPC model */
 		sws.sock = fd;
+#ifdef LINUX_EPOLL
+		set_epoll_event(sws, EPOLLIN);
+#endif
 		sws.uptr = uptr;
 		memset(&(sws.saddr), 0, sizeof(struct sockaddr_storage));
 		// no sockaddr for this socket type, leave saddr null
@@ -426,19 +490,32 @@ template <typename HANDLER_PTR_TYPE> class Phy {
 #endif
 
 		try {
+#ifdef LINUX_EPOLL
+			_socks.emplace(s, PhySocketImpl());
+#else
 			_socks.push_back(PhySocketImpl());
+#endif
 		}
 		catch (...) {
 			ZT_PHY_CLOSE_SOCKET(s);
 			return (PhySocket*)0;
 		}
+#ifdef LINUX_EPOLL
+		PhySocketImpl& sws = _socks.at(s);
+#else
 		PhySocketImpl& sws = _socks.back();
+#endif
 
 		if ((long)s > _nfds)
 			_nfds = (long)s;
+#ifndef LINUX_EPOLL
 		FD_SET(s, &_readfds);
+#endif
 		sws.type = ZT_PHY_SOCKET_UDP;
 		sws.sock = s;
+#ifdef LINUX_EPOLL
+		set_epoll_event(&sws, EPOLLIN);
+#endif
 		sws.uptr = uptr;
 
 #ifdef __UNIX_LIKE__
@@ -532,19 +609,32 @@ template <typename HANDLER_PTR_TYPE> class Phy {
 		}
 
 		try {
+#ifdef LINUX_EPOLL
+			_socks.emplace(s, PhySocketImpl());
+#else
 			_socks.push_back(PhySocketImpl());
+#endif
 		}
 		catch (...) {
 			ZT_PHY_CLOSE_SOCKET(s);
 			return (PhySocket*)0;
 		}
+#ifdef LINUX_EPOLL
+		PhySocketImpl& sws = _socks.at(s);
+#else
 		PhySocketImpl& sws = _socks.back();
+#endif
 
 		if ((long)s > _nfds)
 			_nfds = (long)s;
+#ifndef LINUX_EPOLL
 		FD_SET(s, &_readfds);
+#endif
 		sws.type = ZT_PHY_SOCKET_UNIX_LISTEN;
 		sws.sock = s;
+#ifdef LINUX_EPOLL
+		set_epoll_event(sws, EPOLLIN);
+#endif
 		sws.uptr = uptr;
 		memset(&(sws.saddr), 0, sizeof(struct sockaddr_storage));
 		memcpy(&(sws.saddr), &sun, sizeof(struct sockaddr_un));
@@ -605,19 +695,32 @@ template <typename HANDLER_PTR_TYPE> class Phy {
 		}
 
 		try {
+#ifdef LINUX_EPOLL
+			_socks.emplace(s, PhySocketImpl());
+#else
 			_socks.push_back(PhySocketImpl());
+#endif
 		}
 		catch (...) {
 			ZT_PHY_CLOSE_SOCKET(s);
 			return (PhySocket*)0;
 		}
+#ifdef LINUX_EPOLL
+		PhySocketImpl& sws = _socks.at(s);
+#else
 		PhySocketImpl& sws = _socks.back();
+#endif
 
 		if ((long)s > _nfds)
 			_nfds = (long)s;
+#ifndef LINUX_EPOLL
 		FD_SET(s, &_readfds);
+#endif
 		sws.type = ZT_PHY_SOCKET_TCP_LISTEN;
 		sws.sock = s;
+#ifdef LINUX_EPOLL
+		set_epoll_event(&sws, EPOLLIN);
+#endif
 		sws.uptr = uptr;
 		memset(&(sws.saddr), 0, sizeof(struct sockaddr_storage));
 		memcpy(&(sws.saddr), localAddress, (localAddress->sa_family == AF_INET6) ? sizeof(struct sockaddr_in6) : sizeof(struct sockaddr_in));
@@ -701,28 +804,47 @@ template <typename HANDLER_PTR_TYPE> class Phy {
 		}
 
 		try {
+#ifdef LINUX_EPOLL
+			_socks.emplace(s, PhySocketImpl());
+#else
 			_socks.push_back(PhySocketImpl());
+#endif
 		}
 		catch (...) {
 			ZT_PHY_CLOSE_SOCKET(s);
 			return (PhySocket*)0;
 		}
+#ifdef LINUX_EPOLL
+		PhySocketImpl& sws = _socks.at(s);
+#else
 		PhySocketImpl& sws = _socks.back();
+#endif
 
 		if ((long)s > _nfds)
 			_nfds = (long)s;
 		if (connected) {
+#ifndef LINUX_EPOLL
 			FD_SET(s, &_readfds);
+#endif
 			sws.type = ZT_PHY_SOCKET_TCP_OUT_CONNECTED;
 		}
 		else {
+#ifndef LINUX_EPOLL
 			FD_SET(s, &_writefds);
+#endif
 #if defined(_WIN32) || defined(_WIN64)
 			FD_SET(s, &_exceptfds);
 #endif
 			sws.type = ZT_PHY_SOCKET_TCP_OUT_PENDING;
 		}
 		sws.sock = s;
+#ifdef LINUX_EPOLL
+		if (connected) {
+			set_epoll_event(&sws, EPOLLIN);
+		} else {
+			set_epoll_event(&sws, EPOLLOUT);
+		}
+#endif
 		sws.uptr = uptr;
 		memset(&(sws.saddr), 0, sizeof(struct sockaddr_storage));
 		memcpy(&(sws.saddr), remoteAddress, (remoteAddress->sa_family == AF_INET6) ? sizeof(struct sockaddr_in6) : sizeof(struct sockaddr_in));
@@ -875,6 +997,15 @@ template <typename HANDLER_PTR_TYPE> class Phy {
 	 */
 	inline void setNotifyWritable(PhySocket* sock, bool notifyWritable)
 	{
+#ifdef LINUX_EPOLL
+		PhySocketImpl *sws = reinterpret_cast<PhySocketImpl*>(sock);
+		if (notifyWritable) {
+			set_epoll_event(sws, EPOLLOUT);
+		}
+		else {
+			set_epoll_event(sws, 0, EPOLLOUT);
+		}
+#else
 		PhySocketImpl& sws = *(reinterpret_cast<PhySocketImpl*>(sock));
 		if (notifyWritable) {
 			FD_SET(sws.sock, &_writefds);
@@ -882,6 +1013,7 @@ template <typename HANDLER_PTR_TYPE> class Phy {
 		else {
 			FD_CLR(sws.sock, &_writefds);
 		}
+#endif
 	}
 
 	/**
@@ -896,6 +1028,15 @@ template <typename HANDLER_PTR_TYPE> class Phy {
 	 */
 	inline void setNotifyReadable(PhySocket* sock, bool notifyReadable)
 	{
+#ifdef LINUX_EPOLL
+		PhySocketImpl *sws = reinterpret_cast<PhySocketImpl*>(sock);
+		if (notifyReadable) {
+			set_epoll_event(sws, EPOLLIN);
+		}
+		else {
+			set_epoll_event(sws, 0, EPOLLIN);
+		}
+#else
 		PhySocketImpl& sws = *(reinterpret_cast<PhySocketImpl*>(sock));
 		if (notifyReadable) {
 			FD_SET(sws.sock, &_readfds);
@@ -903,6 +1044,7 @@ template <typename HANDLER_PTR_TYPE> class Phy {
 		else {
 			FD_CLR(sws.sock, &_readfds);
 		}
+#endif
 	}
 
 	/**
@@ -918,6 +1060,21 @@ template <typename HANDLER_PTR_TYPE> class Phy {
 	{
 		char buf[131072];
 		struct sockaddr_storage ss;
+#ifdef LINUX_EPOLL
+		static epoll_event events[ZT_PHY_MAX_SOCKETS];
+		int n = ::epoll_wait(_epollfd, events, ZT_PHY_MAX_SOCKETS, (timeout > 0) ? (int)timeout : -1);
+		if (n <= 0)
+			return;
+
+		for (int i = 0; i < n; ++i) {
+			ZT_PHY_SOCKFD_TYPE sock = events[i].data.fd;
+			if (sock == _whackReceiveSocket) {
+				char tmp[16];
+				::read(_whackReceiveSocket, tmp, 16);
+				continue;
+			}
+			PhySocketImpl* s = &_socks.at(sock);
+#else
 		struct timeval tv;
 		fd_set rfds, wfds, efds;
 
@@ -944,6 +1101,7 @@ template <typename HANDLER_PTR_TYPE> class Phy {
 		}
 
 		for (typename std::list<PhySocketImpl>::iterator s(_socks.begin()); s != _socks.end();) {
+#endif
 			switch (s->type) {
 				case ZT_PHY_SOCKET_TCP_OUT_PENDING:
 #if defined(_WIN32) || defined(_WIN64)
@@ -952,15 +1110,23 @@ template <typename HANDLER_PTR_TYPE> class Phy {
 					}
 					else   // ... if
 #endif
+#ifdef LINUX_EPOLL
+						if (events[i].events & EPOLLOUT) {
+#else
 						if (FD_ISSET(s->sock, &wfds)) {
+#endif
 						socklen_t slen = sizeof(ss);
 						if (::getpeername(s->sock, (struct sockaddr*)&ss, &slen) != 0) {
 							this->close((PhySocket*)&(*s), true);
 						}
 						else {
 							s->type = ZT_PHY_SOCKET_TCP_OUT_CONNECTED;
+#ifdef LINUX_EPOLL
+							set_epoll_event(s, EPOLLIN, EPOLLOUT);
+#else
 							FD_SET(s->sock, &_readfds);
 							FD_CLR(s->sock, &_writefds);
+#endif
 #if defined(_WIN32) || defined(_WIN64)
 							FD_CLR(s->sock, &_exceptfds);
 #endif
@@ -976,7 +1142,11 @@ template <typename HANDLER_PTR_TYPE> class Phy {
 				case ZT_PHY_SOCKET_TCP_OUT_CONNECTED:
 				case ZT_PHY_SOCKET_TCP_IN: {
 					ZT_PHY_SOCKFD_TYPE sock = s->sock;	 // if closed, s->sock becomes invalid as s is no longer dereferencable
+#ifdef LINUX_EPOLL
+					if (events[i].events & EPOLLIN) {
+#else
 					if (FD_ISSET(sock, &rfds)) {
+#endif
 						long n = (long)::recv(sock, buf, sizeof(buf), 0);
 						if (n <= 0) {
 							this->close((PhySocket*)&(*s), true);
@@ -989,7 +1159,11 @@ template <typename HANDLER_PTR_TYPE> class Phy {
 							}
 						}
 					}
+#ifdef LINUX_EPOLL
+					if ((events[i].events & EPOLLOUT) && (s->events & EPOLLOUT)) {
+#else
 					if ((FD_ISSET(sock, &wfds)) && (FD_ISSET(sock, &_writefds))) {
+#endif
 						try {
 							_handler->phyOnTcpWritable((PhySocket*)&(*s), &(s->uptr));
 						}
@@ -999,7 +1173,11 @@ template <typename HANDLER_PTR_TYPE> class Phy {
 				} break;
 
 				case ZT_PHY_SOCKET_TCP_LISTEN:
+#ifdef LINUX_EPOLL
+					if (events[i].events & EPOLLIN) {
+#else
 					if (FD_ISSET(s->sock, &rfds)) {
+#endif
 						memset(&ss, 0, sizeof(ss));
 						socklen_t slen = sizeof(ss);
 						ZT_PHY_SOCKFD_TYPE newSock = ::accept(s->sock, (struct sockaddr*)&ss, &slen);
@@ -1024,17 +1202,25 @@ template <typename HANDLER_PTR_TYPE> class Phy {
 								}
 								fcntl(newSock, F_SETFL, O_NONBLOCK);
 #endif
+#ifdef LINUX_EPOLL
+								_socks.emplace(newSock, PhySocketImpl());
+								PhySocketImpl& sws = _socks.at(newSock);
+#else
 								_socks.push_back(PhySocketImpl());
 								PhySocketImpl& sws = _socks.back();
 								FD_SET(newSock, &_readfds);
+#endif
 								if ((long)newSock > _nfds)
 									_nfds = (long)newSock;
 								sws.type = ZT_PHY_SOCKET_TCP_IN;
 								sws.sock = newSock;
+#ifdef LINUX_EPOLL
+								set_epoll_event(&sws, EPOLLIN);
+#endif
 								sws.uptr = (void*)0;
 								memcpy(&(sws.saddr), &ss, sizeof(struct sockaddr_storage));
 								try {
-									_handler->phyOnTcpAccept((PhySocket*)&(*s), (PhySocket*)&(_socks.back()), &(s->uptr), &(sws.uptr), (const struct sockaddr*)&(sws.saddr));
+									_handler->phyOnTcpAccept((PhySocket*)&(*s), (PhySocket*)&sws, &(s->uptr), &(sws.uptr), (const struct sockaddr*)&(sws.saddr));
 								}
 								catch (...) {
 								}
@@ -1044,7 +1230,11 @@ template <typename HANDLER_PTR_TYPE> class Phy {
 					break;
 
 				case ZT_PHY_SOCKET_UDP:
+#ifdef LINUX_EPOLL
+					if (events[i].events & EPOLLIN) {
+#else
 					if (FD_ISSET(s->sock, &rfds)) {
+#endif
 #if (defined(__linux__) || defined(linux) || defined(__linux)) && defined(MSG_WAITFORONE)
 #define RECVMMSG_WINDOW_SIZE 128
 #define RECVMMSG_BUF_SIZE	 1500
@@ -1105,14 +1295,22 @@ template <typename HANDLER_PTR_TYPE> class Phy {
 				case ZT_PHY_SOCKET_UNIX_IN: {
 #ifdef __UNIX_LIKE__
 					ZT_PHY_SOCKFD_TYPE sock = s->sock;	 // if closed, s->sock becomes invalid as s is no longer dereferencable
+#ifdef LINUX_EPOLL
+					if ((events[i].events & EPOLLOUT) && (s->events & EPOLLOUT)) {
+#else
 					if ((FD_ISSET(sock, &wfds)) && (FD_ISSET(sock, &_writefds))) {
+#endif
 						try {
 							_handler->phyOnUnixWritable((PhySocket*)&(*s), &(s->uptr));
 						}
 						catch (...) {
 						}
 					}
+#ifdef LINUX_EPOLL
+					if (events[i].events & EPOLLIN) {
+#else
 					if (FD_ISSET(sock, &rfds)) {
+#endif
 						long n = (long)::read(sock, buf, sizeof(buf));
 						if (n <= 0) {
 							this->close((PhySocket*)&(*s), true);
@@ -1130,7 +1328,11 @@ template <typename HANDLER_PTR_TYPE> class Phy {
 
 				case ZT_PHY_SOCKET_UNIX_LISTEN:
 #ifdef __UNIX_LIKE__
+#ifdef LINUX_EPOLL
+					if (events[i].events & EPOLLIN) {
+#else
 					if (FD_ISSET(s->sock, &rfds)) {
+#endif
 						memset(&ss, 0, sizeof(ss));
 						socklen_t slen = sizeof(ss);
 						ZT_PHY_SOCKFD_TYPE newSock = ::accept(s->sock, (struct sockaddr*)&ss, &slen);
@@ -1140,13 +1342,21 @@ template <typename HANDLER_PTR_TYPE> class Phy {
 							}
 							else {
 								fcntl(newSock, F_SETFL, O_NONBLOCK);
+#ifdef LINUX_EPOLL
+								_socks.emplace(newSock, PhySocketImpl());
+								PhySocketImpl& sws = _socks.at(newSock);
+#else
 								_socks.push_back(PhySocketImpl());
 								PhySocketImpl& sws = _socks.back();
 								FD_SET(newSock, &_readfds);
+#endif
 								if ((long)newSock > _nfds)
 									_nfds = (long)newSock;
 								sws.type = ZT_PHY_SOCKET_UNIX_IN;
 								sws.sock = newSock;
+#ifdef LINUX_EPOLL
+								set_epoll_event(&sws, EPOLLIN);
+#endif
 								sws.uptr = (void*)0;
 								memcpy(&(sws.saddr), &ss, sizeof(struct sockaddr_storage));
 								try {
@@ -1161,9 +1371,14 @@ template <typename HANDLER_PTR_TYPE> class Phy {
 					break;
 
 				case ZT_PHY_SOCKET_FD: {
+#ifdef LINUX_EPOLL
+					const bool readable = ((events[i].events & EPOLLIN) && (s->events & EPOLLIN));
+					const bool writable = ((events[i].events & EPOLLOUT) && (s->events & EPOLLOUT));
+#else
 					ZT_PHY_SOCKFD_TYPE sock = s->sock;
 					const bool readable = ((FD_ISSET(sock, &rfds)) && (FD_ISSET(sock, &_readfds)));
 					const bool writable = ((FD_ISSET(sock, &wfds)) && (FD_ISSET(sock, &_writefds)));
+#endif
 					if ((readable) || (writable)) {
 						try {
 							//_handler->phyOnFileDescriptorActivity((PhySocket *)&(*s),&(s->uptr),readable,writable);
@@ -1178,9 +1393,13 @@ template <typename HANDLER_PTR_TYPE> class Phy {
 			}
 
 			if (s->type == ZT_PHY_SOCKET_CLOSED)
+#ifdef LINUX_EPOLL
+				_socks.erase(s->sock);
+#else
 				_socks.erase(s++);
 			else
 				++s;
+#endif
 		}
 	}
 
@@ -1196,8 +1415,12 @@ template <typename HANDLER_PTR_TYPE> class Phy {
 		if (sws.type == ZT_PHY_SOCKET_CLOSED)
 			return;
 
+#ifdef LINUX_EPOLL
+		set_epoll_event(&sws, 0, EPOLLIN | EPOLLOUT);
+#else
 		FD_CLR(sws.sock, &_readfds);
 		FD_CLR(sws.sock, &_writefds);
+#endif
 #if defined(_WIN32) || defined(_WIN64)
 		FD_CLR(sws.sock, &_exceptfds);
 #endif
@@ -1248,9 +1471,15 @@ template <typename HANDLER_PTR_TYPE> class Phy {
 			long nfds = (long)_whackSendSocket;
 			if ((long)_whackReceiveSocket > nfds)
 				nfds = (long)_whackReceiveSocket;
+#ifdef LINUX_EPOLL
+			for (const std::pair<int, PhySocketImpl>& s : _socks) {
+				if ((s.second.type != ZT_PHY_SOCKET_CLOSED) && ((long)s.second.sock > nfds))
+					nfds = (long)s.second.sock;
+#else
 			for (typename std::list<PhySocketImpl>::iterator s(_socks.begin()); s != _socks.end(); ++s) {
 				if ((s->type != ZT_PHY_SOCKET_CLOSED) && ((long)s->sock > nfds))
 					nfds = (long)s->sock;
+#endif
 			}
 			_nfds = nfds;
 		}
