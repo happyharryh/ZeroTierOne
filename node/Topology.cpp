@@ -212,6 +212,8 @@ ZT_PeerRole Topology::role(const Address& ztaddr) const
 	return ZT_PEER_ROLE_LEAF;
 }
 
+uint64_t _worldIdForMoonUpdate(const void* uptr);
+
 bool Topology::isProhibitedEndpoint(const Address& ztaddr, const InetAddress& ipaddr) const
 {
 	Mutex::Lock _l(_upstreams_m);
@@ -241,6 +243,9 @@ bool Topology::isProhibitedEndpoint(const Address& ztaddr, const InetAddress& ip
 						if (ipaddr.ipsEqual(*e)) {
 							return false;
 						}
+					}
+					if (m->id() == _worldIdForMoonUpdate(RR->node->_uPtr)) {
+						return false;
 					}
 				}
 			}
