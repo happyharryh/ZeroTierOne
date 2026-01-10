@@ -36,6 +36,9 @@
 #define ZT_TCP_PROXY_CONNECTION_TIMEOUT_SECONDS 300
 #define ZT_TCP_PROXY_TCP_PORT					443
 
+constexpr time_t HANDSHAKE_TIMEOUT = 5000;
+constexpr time_t IDLE_CHECK_INTERVAL = 120000;
+
 using namespace ZeroTier;
 
 /*
@@ -75,6 +78,16 @@ using namespace ZeroTier;
  * as long as such nodes appear to be in the wild.
  */
 
+inline time_t clock_gettime_ms() {
+	static timespec ts;
+#if defined(__linux__) || defined(linux) || defined(__LINUX__) || defined(__linux)
+	clock_gettime(CLOCK_MONOTONIC_COARSE, &ts);
+#else
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+#endif
+	return ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+}
+
 struct TcpProxyService;
 struct TcpProxyService {
 	Phy<TcpProxyService*>* phy;
@@ -88,8 +101,10 @@ struct TcpProxyService {
 		PhySocket* udp;
 		time_t lastActivity;
 		bool newVersion;
+		const std::pair<time_t, Client*>* timer;
 	};
 	std::map<PhySocket*, Client> clients;
+	std::set<std::pair<time_t, Client*>> timers;
 
 	PhySocket* getUnusedUdp(void* uptr)
 	{
@@ -143,7 +158,7 @@ struct TcpProxyService {
 					c.tcpWriteBuf[c.tcpWritePtr++] = ((const char*)data)[i];
 			}
 
-			printf("<< UDP %s:%d -> %.16llx\n", inet_ntoa(reinterpret_cast<const struct sockaddr_in*>(from)->sin_addr), (int)ntohs(reinterpret_cast<const struct sockaddr_in*>(from)->sin_port), (unsigned long long)&c);
+			// printf("<< UDP %s:%d -> %.16llx\n", inet_ntoa(reinterpret_cast<const struct sockaddr_in*>(from)->sin_addr), (int)ntohs(reinterpret_cast<const struct sockaddr_in*>(from)->sin_port), (unsigned long long)&c);
 		}
 	}
 
@@ -169,6 +184,7 @@ struct TcpProxyService {
 		c.lastActivity = time((time_t*)0);
 		c.newVersion = false;
 		*uptrN = (void*)&c;
+		c.timer = &*timers.emplace(clock_gettime_ms() + HANDSHAKE_TIMEOUT, &c).first;
 		printf("<< TCP from %s -> %.16llx\n", inet_ntoa(reinterpret_cast<const struct sockaddr_in*>(from)->sin_addr), (unsigned long long)&c);
 	}
 
@@ -178,6 +194,8 @@ struct TcpProxyService {
 			return;
 		Client& c = *((Client*)*uptr);
 		phy->close(c.udp);
+		if (c.timer)
+			timers.erase(*c.timer);
 		clients.erase(sock);
 		printf("** TCP %.16llx closed\n", (unsigned long long)*uptr);
 	}
@@ -200,6 +218,8 @@ struct TcpProxyService {
 					if (mlen == 4) {
 						// Right now just sending this means the client is 'new enough' for the IP header
 						c.newVersion = true;
+						timers.erase(*c.timer);
+						c.timer = nullptr;
 						printf("<< TCP %.16llx HELLO\n", (unsigned long long)*uptr);
 					}
 					else if (mlen >= 7) {
@@ -233,7 +253,7 @@ struct TcpProxyService {
 						// Note: we do not relay to privileged ports... just an abuse prevention rule.
 						if ((ntohs(dest.sin_port) > 1024) && (payloadLen >= 16)) {
 							phy->udpSend(c.udp, (const struct sockaddr*)&dest, payload, payloadLen);
-							printf(">> TCP %.16llx to %s:%d\n", (unsigned long long)*uptr, inet_ntoa(dest.sin_addr), (int)ntohs(dest.sin_port));
+							// printf(">> TCP %.16llx to %s:%d\n", (unsigned long long)*uptr, inet_ntoa(dest.sin_addr), (int)ntohs(dest.sin_port));
 						}
 					}
 
@@ -271,6 +291,27 @@ struct TcpProxyService {
 		for (std::vector<PhySocket*>::iterator s(toClose.begin()); s != toClose.end(); ++s)
 			phy->close(*s);
 	}
+
+	int epoll_timeout() {
+		while (true) {
+			std::set<std::pair<time_t, Client*>>::const_iterator head = timers.cbegin();
+
+			time_t now = clock_gettime_ms();
+			time_t timeout = head->first - now;
+			if (timeout > 0) {
+				return static_cast<int>(timeout);
+			}
+
+			if (head->second) {
+				phy->close(head->second->tcp);
+				continue;
+			}
+
+			doHousekeeping();
+			timers.erase(head);
+			timers.emplace(now + IDLE_CHECK_INTERVAL, nullptr);
+		}
+	}
 };
 
 int main(int argc, char** argv)
@@ -279,10 +320,15 @@ int main(int argc, char** argv)
 	signal(SIGHUP, SIG_IGN);
 	srand(time((time_t*)0));
 
+	setvbuf(stdout, NULL, _IOLBF, 0);
+	setvbuf(stderr, NULL, _IOLBF, 0);
+	prometheus::simpleapi::saver.stop();
+
 	TcpProxyService svc;
 	Phy<TcpProxyService*> phy(&svc, false, true);
 	svc.phy = &phy;
 	svc.udpPortCounter = 1023;
+	svc.timers.emplace(clock_gettime_ms() + IDLE_CHECK_INTERVAL, nullptr);
 
 	{
 		struct sockaddr_in laddr;
@@ -295,14 +341,8 @@ int main(int argc, char** argv)
 		}
 	}
 
-	time_t lastDidHousekeeping = time((time_t*)0);
 	for (;;) {
-		phy.poll(120000);
-		time_t now = time((time_t*)0);
-		if ((now - lastDidHousekeeping) > 120) {
-			lastDidHousekeeping = now;
-			svc.doHousekeeping();
-		}
+		phy.poll(svc.epoll_timeout());
 	}
 
 	return 0;
