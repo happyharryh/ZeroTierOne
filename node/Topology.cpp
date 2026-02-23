@@ -161,6 +161,9 @@ SharedPtr<Peer> Topology::getUpstreamPeer(const uint64_t nwid)
 		Mutex::Lock _l2(_peers_m);
 		Mutex::Lock _l1(_upstreams_m);
 		for (std::vector<Address>::const_iterator a(_upstreamAddresses.begin()); a != _upstreamAddresses.end(); ++a) {
+			if (relayBlacklist.contains(*a)) {
+				continue;
+			}
 			const SharedPtr<Peer>* p = _peers.get(*a);
 			if (p) {
 				const unsigned int q = (*p)->relayQuality(now);
@@ -212,8 +215,6 @@ ZT_PeerRole Topology::role(const Address& ztaddr) const
 	return ZT_PEER_ROLE_LEAF;
 }
 
-uint64_t _worldIdForMoonUpdate(const void* uptr);
-
 bool Topology::isProhibitedEndpoint(const Address& ztaddr, const InetAddress& ipaddr) const
 {
 	Mutex::Lock _l(_upstreams_m);
@@ -244,7 +245,7 @@ bool Topology::isProhibitedEndpoint(const Address& ztaddr, const InetAddress& ip
 							return false;
 						}
 					}
-					if (m->id() == _worldIdForMoonUpdate(RR->node->_uPtr)) {
+					if (moonWhitelist.contains(ztaddr)) {
 						return false;
 					}
 				}

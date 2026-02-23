@@ -2685,6 +2685,8 @@ class OneServiceImpl : public OneService {
 		_v6Hints.clear();
 		_v4Blacklists.clear();
 		_v6Blacklists.clear();
+		Topology::relayBlacklist.clear();
+		Topology::moonWhitelist.clear();
 		json& virt = lc["virtual"];
 		if (virt.is_object()) {
 			for (json::iterator v(virt.begin()); v != virt.end(); ++v) {
@@ -2727,6 +2729,11 @@ class OneServiceImpl : public OneService {
 							_v4Blacklists.erase(ztaddr2);
 						if (v6b.empty())
 							_v6Blacklists.erase(ztaddr2);
+
+						if (!OSUtils::jsonBool(v.value()["allowRelayTo"], true))
+							Topology::relayBlacklist[ztaddr] = true;
+						if (!OSUtils::jsonBool(v.value()["verifyMoonIP"], true))
+							Topology::moonWhitelist[ztaddr] = true;
 					}
 				}
 			}
@@ -4465,11 +4472,6 @@ OneService* OneService::newInstance(const char* hp, unsigned int port)
 }
 OneService::~OneService()
 {
-}
-
-uint64_t _worldIdForMoonUpdate(const void* uptr)
-{
-	return reinterpret_cast<const OneServiceImpl*>(uptr)->_worldIdForMoonUpdate;
 }
 
 }	// namespace ZeroTier
