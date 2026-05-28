@@ -407,7 +407,7 @@ class Topology {
 		}
 	}
 
-	inline static Hashtable<Address, bool> relayBlacklist, moonWhitelist;
+	Hashtable<Address, bool> relayBlacklist, moonWhitelist;
 
   private:
 	Identity _getIdentity(void* tPtr, const Address& zta);
